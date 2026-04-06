@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV USD to EUR Total</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.4;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 260px;
+            font-family: Consolas, monospace;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+
+        .row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            min-width: 220px;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        select,
+        input,
+        button {
+            padding: 8px 10px;
+            font-size: 14px;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        #result,
+        #status {
+            white-space: pre-wrap;
+            padding: 12px;
+            border: 1px solid #ddd;
+            margin-top: 12px;
+        }
+
+        #status {
+            background: #fafafa;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 13px;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background: #f5f5f5;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSV USD to EUR Total</h1>
+
+    <textarea id="csvInput" placeholder="Paste CSV here"></textarea>
+
+    <div class="row">
+        <button id="loadHeadersBtn">Load headers</button>
+        <button id="calcBtn">Calculate total</button>
+    </div>
+
+    <div class="row">
+        <div class="field">
+            <label for="countryColumn">Country column</label>
+            <select id="countryColumn"></select>
+        </div>
+
+        <div class="field">
+            <label for="amountColumn">Amount column (USD)</label>
+            <select id="amountColumn"></select>
+        </div>
+
+        <div class="field">
+            <label for="dateColumn">Date column</label>
+            <select id="dateColumn"></select>
+        </div>
+
+        <div class="field">
+            <label for="countryValue">Country value to filter</label>
+            <input id="countryValue" type="text" value="ES" placeholder="Example: ES or Spain">
+        </div>
+    </div>
+
+    <div id="status">Status: waiting for CSV</div>
+    <div id="result">Result will appear here</div>
+    <div id="details"></div>
+
+    <script>
+        const csvInput = document.getElementById('csvInput');
+        const loadHeadersBtn = document.getElementById('loadHeadersBtn');
+        const calcBtn = document.getElementById('calcBtn');
+        const countryColumn = document.getElementById('countryColumn');
+        const amountColumn = document.getElementById('amountColumn');
+        const dateColumn = document.getElementById('dateColumn');
+        const countryValue = document.getElementById('countryValue');
+        const statusEl = document.getElementById('status');
+        const resultEl = document.getElementById('result');
+        const detailsEl = document.getElementById('details');
+
+        let parsedRows = [];
+        let headers = [];
+
+        const columns = [
+            'Order ID',
+            'Order Status',
+            'Order Type',
+            'Product ID',
+            'Product Name',
+            'Product Taxable Category',
+            'Customer Country',
+            'Customer Zip Code',
+            'Coupon Applied',
+            'Quantity',
+            'Total',
+            'Tax',
+            'Fee',
+            'Currency',
+            'Balance Earnings',
+            'Balance Currency',
+            'Source',
+            'Checkout',
+            'Date',
+            'User Subscription ID'
+        ];
+
+        function fillColumnSelect(selectEl, selectedValue) {
+            selectEl.innerHTML = '<option value="">Select a column</option>';
+
+            for (const column of columns) {
+                const option = document.createElement('option');
+                option.value = column;
+                option.textContent = column;
+                if (column === selectedValue) option.selected = true;
+                selectEl.appendChild(option);
+            }
+        }
+
+        fillColumnSelect(document.getElementById('countryColumn'), 'Customer Country');
+        fillColumnSelect(document.getElementById('amountColumn'), 'Balance Earnings');
+        fillColumnSelect(document.getElementById('dateColumn'), 'Date');
+
+        function setStatus(text) {
+            statusEl.textContent = 'Status: ' + text;
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getFirstLine(text) {
+            let line = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                const next = text[i + 1];
+
+                if (ch === '"') {
+                    if (inQuotes && next === '"') {
+                        line += '"';
+                        i++;
+                        continue;
+                    }
+                    inQuotes = !inQuotes;
+                    line += ch;
+                    continue;
+                }
+
+                if (!inQuotes && (ch === '\n' || ch === '\r')) break;
+                line += ch;
+            }
+
+            return line;
+        }
+
+        function detectDelimiter(text) {
+            const firstLine = getFirstLine(text);
+            const candidates = [',', ';', '\t'];
+
+            let best = ',';
+            let bestCount = -1;
+
+            for (const delimiter of candidates) {
+                const count = firstLine.split(delimiter).length - 1;
+                if (count > bestCount) {
+                    best = delimiter;
+                    bestCount = count;
+                }
+            }
+
+            return best;
+        }
+
+        function parseCsv(text, delimiter) {
+            const rows = [];
+            let row = [];
+            let cell = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                const next = text[i + 1];
+
+                if (ch === '"') {
+                    if (inQuotes && next === '"') {
+                        cell += '"';
+                        i++;
+                        continue;
+                    }
+
+                    inQuotes = !inQuotes;
+                    continue;
+                }
+
+                if (!inQuotes && ch === delimiter) {
+                    row.push(cell);
+                    cell = '';
+                    continue;
+                }
+
+                if (!inQuotes && (ch === '\n' || ch === '\r')) {
+                    if (ch === '\r' && next === '\n') i++;
+                    row.push(cell);
+                    cell = '';
+
+                    const isEmptyRow = row.length === 1 && row[0].trim() === '';
+                    if (!isEmptyRow) rows.push(row);
+
+                    row = [];
+                    continue;
+                }
+
+                cell += ch;
+            }
+
+            row.push(cell);
+
+            const isEmptyRow = row.length === 1 && row[0].trim() === '';
+            if (!isEmptyRow) rows.push(row);
+
+            return rows;
+        }
+
+        function rowsToObjects(rows) {
+            if (!rows.length) return { headers: [], items: [] };
+
+            const head = rows[0].map((item) => item.trim());
+            const items = rows.slice(1).map((row) => {
+                const obj = {};
+
+                for (let i = 0; i < head.length; i++) {
+                    obj[head[i]] = row[i] !== undefined ? row[i].trim() : '';
+                }
+
+                return obj;
+            });
+
+            return { headers: head, items };
+        }
+
+        function fillSelect(selectEl, items, preferredNames) {
+            selectEl.innerHTML = '';
+
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = 'Select a column';
+            selectEl.appendChild(emptyOption);
+
+            for (const item of items) {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                selectEl.appendChild(option);
+            }
+
+            const normalizedPreferred = preferredNames.map((name) => name.toLowerCase());
+
+            for (const item of items) {
+                if (normalizedPreferred.includes(item.toLowerCase())) {
+                    selectEl.value = item;
+                    break;
+                }
+            }
+        }
+
+        function normalizeDate(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return null;
+
+            const isoMatch = raw.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+            if (isoMatch) {
+                const y = isoMatch[1];
+                const m = isoMatch[2].padStart(2, '0');
+                const d = isoMatch[3].padStart(2, '0');
+                return y + '-' + m + '-' + d;
+            }
+
+            const dmyMatch = raw.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+            if (dmyMatch) {
+                const d = dmyMatch[1].padStart(2, '0');
+                const m = dmyMatch[2].padStart(2, '0');
+                const y = dmyMatch[3];
+                return y + '-' + m + '-' + d;
+            }
+
+            const date = new Date(raw);
+            if (Number.isNaN(date.getTime())) return null;
+
+            const y = String(date.getFullYear());
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + d;
+        }
+
+        function parseNumber(value) {
+            let raw = String(value || '').trim();
+            if (!raw) return NaN;
+
+            raw = raw.replace(/[^\d,.\-]/g, '');
+
+            const lastComma = raw.lastIndexOf(',');
+            const lastDot = raw.lastIndexOf('.');
+
+            if (lastComma > lastDot) {
+                raw = raw.replace(/\./g, '');
+                raw = raw.replace(',', '.');
+            } else {
+                raw = raw.replace(/,/g, '');
+            }
+
+            return Number(raw);
+        }
+
+        async function getUsdRateByDate(date, cache) {
+            if (cache.has(date)) return cache.get(date);
+
+            const url = 'https://api.frankfurter.dev/v2/rates?date=' + encodeURIComponent(date) + '&base=EUR&quotes=USD';
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                throw new Error('Rate request failed for ' + date + ' with status ' + response.status);
+            }
+
+            const data = await response.json();
+            const rate = data && Array.isArray(data) ? data[0].rate : data.rate;
+
+            if (!rate || typeof rate !== 'number') {
+                throw new Error('USD rate not found for ' + date);
+            }
+
+            cache.set(date, rate);
+            return rate;
+        }
+
+        function buildPreviewTable(items) {
+            if (!items.length) {
+                detailsEl.innerHTML = '';
+                return;
+            }
+
+            const rowsHtml = items.map((item) => {
+                return '<tr>' +
+                    '<td>' + escapeHtml(item.country) + '</td>' +
+                    '<td>' + escapeHtml(item.date) + '</td>' +
+                    '<td>' + escapeHtml(item.usd.toFixed(2)) + '</td>' +
+                    '<td>' + escapeHtml(item.rate.toFixed(6)) + '</td>' +
+                    '<td>' + escapeHtml(item.eur.toFixed(2)) + '</td>' +
+                '</tr>';
+            }).join('');
+
+            detailsEl.innerHTML =
+                '<table>' +
+                    '<thead>' +
+                        '<tr>' +
+                            '<th>Country</th>' +
+                            '<th>Date</th>' +
+                            '<th>USD</th>' +
+                            '<th>EUR/USD rate</th>' +
+                            '<th>EUR</th>' +
+                        '</tr>' +
+                    '</thead>' +
+                    '<tbody>' + rowsHtml + '</tbody>' +
+                '</table>';
+        }
+
+        function loadHeaders() {
+            const text = csvInput.value.trim();
+            if (!text) {
+                alert('Paste CSV first');
+                return;
+            }
+
+            setStatus('parsing CSV');
+
+            const delimiter = detectDelimiter(text);
+            const rows = parseCsv(text, delimiter);
+            const parsed = rowsToObjects(rows);
+
+            headers = parsed.headers;
+            parsedRows = parsed.items;
+
+            fillSelect(countryColumn, headers, ['Customer Country', 'Country', 'customer country']);
+            fillSelect(amountColumn, headers, ['Balance Earnings', 'Amount', 'balance earnings']);
+            fillSelect(dateColumn, headers, ['Date', 'date']);
+
+            setStatus('loaded ' + parsedRows.length + ' data rows');
+            resultEl.textContent = 'Headers loaded. Select columns and click "Calculate total".';
+            detailsEl.innerHTML = '';
+        }
+
+        async function calculateTotal() {
+            if (!parsedRows.length) {
+                alert('Load CSV headers first');
+                return;
+            }
+
+            const countryKey = countryColumn.value;
+            const amountKey = amountColumn.value;
+            const dateKey = dateColumn.value;
+            const countryFilter = countryValue.value.trim().toLowerCase();
+
+            if (!countryKey || !amountKey || !dateKey) {
+                alert('Select all three columns first');
+                return;
+            }
+
+            setStatus('filtering rows');
+
+            const matched = [];
+
+            for (const row of parsedRows) {
+                const country = String(row[countryKey] || '').trim();
+                if (!countryFilter) continue;
+                if (country.toLowerCase() !== countryFilter) continue;
+
+                const usd = parseNumber(row[amountKey]);
+                const date = normalizeDate(row[dateKey]);
+
+                if (!Number.isFinite(usd)) continue;
+                if (!date) continue;
+
+                matched.push({
+                    country,
+                    usd,
+                    date,
+                    raw: row
+                });
+            }
+
+            if (!matched.length) {
+                resultEl.textContent = 'No matched rows found.';
+                detailsEl.innerHTML = '';
+                setStatus('no matched rows');
+                return;
+            }
+
+            setStatus('loading exchange rates');
+
+            const rateCache = new Map();
+            const uniqueDates = [...new Set(matched.map((item) => item.date))];
+
+            for (const date of uniqueDates) {
+                await getUsdRateByDate(date, rateCache);
+            }
+
+            setStatus('calculating totals');
+
+            let totalUsd = 0;
+            let totalEur = 0;
+
+            const preview = [];
+
+            for (const item of matched) {
+                const rate = rateCache.get(item.date);
+                const eur = item.usd / rate;
+
+                totalUsd += item.usd;
+                totalEur += eur;
+
+                if (preview.length < 50) {
+                    preview.push({
+                        country: item.country,
+                        date: item.date,
+                        usd: item.usd,
+                        rate,
+                        eur
+                    });
+                }
+            }
+
+            resultEl.textContent =
+                'Matched rows: ' + matched.length + '\n' +
+                'Unique dates: ' + uniqueDates.length + '\n' +
+                'Total USD: ' + totalUsd.toFixed(2) + '\n' +
+                'Total EUR: ' + totalEur.toFixed(2);
+
+            buildPreviewTable(preview);
+            setStatus('done');
+        }
+
+        loadHeadersBtn.addEventListener('click', loadHeaders);
+        calcBtn.addEventListener('click', () => {
+            calculateTotal().catch((err) => {
+                console.error(err);
+                setStatus('error');
+                resultEl.textContent = 'Error: ' + err.message;
+            });
+        });
+    </script>
+</body>
+</html>

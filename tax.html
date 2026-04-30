@@ -464,8 +464,7 @@
 
             for (const row of parsedRows) {
                 const country = String(row[countryKey] || '').trim();
-                if (!countryFilter) continue;
-                if (country.toLowerCase() !== countryFilter) continue;
+                if (countryFilter && country.toLowerCase() !== countryFilter) continue;
 
                 const usd = parseNumber(row[amountKey]);
                 const date = normalizeDate(row[dateKey]);

@@ -59,6 +59,22 @@
             background: #fafafa;
         }
 
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #ccc;
+            border-top-color: #333;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -122,7 +138,10 @@
         </div>
     </div>
 
-    <div id="status">Status: waiting for CSV</div>
+    <div id="status">
+        <span class="spinner" id="spinner" style="display: none;"></span>
+        <span id="statusText">Status: waiting for CSV</span>
+    </div>
     <div id="result">Result will appear here</div>
     <div id="details"></div>
 
@@ -138,6 +157,8 @@
         const statusCheckboxes = document.getElementById('statusCheckboxes');
         const countryValue = document.getElementById('countryValue');
         const statusEl = document.getElementById('status');
+        const statusTextEl = document.getElementById('statusText');
+        const spinnerEl = document.getElementById('spinner');
         const resultEl = document.getElementById('result');
         const detailsEl = document.getElementById('details');
 
@@ -185,7 +206,15 @@
         fillColumnSelect(document.getElementById('statusColumn'), 'Order Status');
 
         function setStatus(text) {
-            statusEl.textContent = 'Status: ' + text;
+            statusTextEl.textContent = 'Status: ' + text;
+        }
+
+        function showSpinner() {
+            spinnerEl.style.display = 'inline-block';
+        }
+
+        function hideSpinner() {
+            spinnerEl.style.display = 'none';
         }
 
         function escapeHtml(value) {
@@ -385,17 +414,36 @@
             if (cache.has(date)) return cache.get(date);
 
             const url = 'https://api.frankfurter.dev/v2/rates?date=' + encodeURIComponent(date) + '&base=EUR&quotes=USD';
-            const response = await fetch(url);
 
-            if (!response.ok) {
-                throw new Error('Rate request failed for ' + date + ' with status ' + response.status);
+            async function attempt() {
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error('Rate request failed for ' + date + ' with status ' + response.status);
+                }
+
+                const data = await response.json();
+                const rate = data && Array.isArray(data) ? data[0].rate : data.rate;
+
+                if (!rate || typeof rate !== 'number') {
+                    throw new Error('USD rate not found for ' + date);
+                }
+
+                return rate;
             }
 
-            const data = await response.json();
-            const rate = data && Array.isArray(data) ? data[0].rate : data.rate;
-
-            if (!rate || typeof rate !== 'number') {
-                throw new Error('USD rate not found for ' + date);
+            let rate;
+            try {
+                rate = await attempt();
+            } catch (firstError) {
+                console.warn('Rate fetch failed for ' + date + ', retrying in 2s:', firstError);
+                setStatus('rate fetch for ' + date + ' failed, retrying in 2s');
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                try {
+                    rate = await attempt();
+                } catch (secondError) {
+                    throw new Error('Rate request for ' + date + ' failed twice. ' + secondError.message);
+                }
             }
 
             cache.set(date, rate);
@@ -573,13 +621,18 @@
                 return;
             }
 
-            setStatus('loading exchange rates');
-
             const rateCache = new Map();
             const uniqueDates = [...new Set(matched.map((item) => item.date))];
 
-            for (const date of uniqueDates) {
-                await getUsdRateByDate(date, rateCache);
+            showSpinner();
+            try {
+                for (let i = 0; i < uniqueDates.length; i++) {
+                    const date = uniqueDates[i];
+                    setStatus('loading rate for ' + date + ' (' + (i + 1) + '/' + uniqueDates.length + ')');
+                    await getUsdRateByDate(date, rateCache);
+                }
+            } finally {
+                hideSpinner();
             }
 
             setStatus('calculating totals');

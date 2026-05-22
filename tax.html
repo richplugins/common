@@ -105,8 +105,20 @@
         </div>
 
         <div class="field">
+            <label for="statusColumn">Status column</label>
+            <select id="statusColumn"></select>
+        </div>
+
+        <div class="field">
             <label for="countryValue">Country value to filter</label>
             <input id="countryValue" type="text" value="ES" placeholder="Example: ES or Spain">
+        </div>
+    </div>
+
+    <div class="row" id="statusFilterContainer" style="display: none;">
+        <div class="field" style="min-width: 100%;">
+            <label>Statuses to include</label>
+            <div id="statusCheckboxes"></div>
         </div>
     </div>
 
@@ -121,6 +133,9 @@
         const countryColumn = document.getElementById('countryColumn');
         const amountColumn = document.getElementById('amountColumn');
         const dateColumn = document.getElementById('dateColumn');
+        const statusColumn = document.getElementById('statusColumn');
+        const statusFilterContainer = document.getElementById('statusFilterContainer');
+        const statusCheckboxes = document.getElementById('statusCheckboxes');
         const countryValue = document.getElementById('countryValue');
         const statusEl = document.getElementById('status');
         const resultEl = document.getElementById('result');
@@ -167,6 +182,7 @@
         fillColumnSelect(document.getElementById('countryColumn'), 'Customer Country');
         fillColumnSelect(document.getElementById('amountColumn'), 'Balance Earnings');
         fillColumnSelect(document.getElementById('dateColumn'), 'Date');
+        fillColumnSelect(document.getElementById('statusColumn'), 'Order Status');
 
         function setStatus(text) {
             statusEl.textContent = 'Status: ' + text;
@@ -417,6 +433,52 @@
                 '</table>';
         }
 
+        function populateStatusCheckboxes() {
+            const statusKey = statusColumn.value;
+            statusCheckboxes.innerHTML = '';
+
+            if (!statusKey || !parsedRows.length) {
+                statusFilterContainer.style.display = 'none';
+                return;
+            }
+
+            const uniqueStatuses = [...new Set(
+                parsedRows
+                    .map((r) => String(r[statusKey] || '').trim())
+                    .filter(Boolean)
+            )].sort();
+
+            if (!uniqueStatuses.length) {
+                statusFilterContainer.style.display = 'none';
+                return;
+            }
+
+            const defaultChecked = ['completed', 'partially refunded'];
+
+            for (const status of uniqueStatuses) {
+                const label = document.createElement('label');
+                label.style.display = 'inline-flex';
+                label.style.alignItems = 'center';
+                label.style.gap = '4px';
+                label.style.marginRight = '14px';
+                label.style.fontWeight = 'normal';
+                label.style.cursor = 'pointer';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = status;
+                if (defaultChecked.includes(status.toLowerCase())) {
+                    checkbox.checked = true;
+                }
+
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(' ' + status));
+                statusCheckboxes.appendChild(label);
+            }
+
+            statusFilterContainer.style.display = 'flex';
+        }
+
         function loadHeaders() {
             const text = csvInput.value.trim();
             if (!text) {
@@ -436,6 +498,9 @@
             fillSelect(countryColumn, headers, ['Customer Country', 'Country', 'customer country']);
             fillSelect(amountColumn, headers, ['Balance Earnings', 'Amount', 'balance earnings']);
             fillSelect(dateColumn, headers, ['Date', 'date']);
+            fillSelect(statusColumn, headers, ['Order Status', 'Status', 'order status']);
+
+            populateStatusCheckboxes();
 
             setStatus('loaded ' + parsedRows.length + ' data rows');
             resultEl.textContent = 'Headers loaded. Select columns and click "Calculate total".';
@@ -451,10 +516,26 @@
             const countryKey = countryColumn.value;
             const amountKey = amountColumn.value;
             const dateKey = dateColumn.value;
+            const statusKey = statusColumn.value;
             const countryFilter = countryValue.value.trim().toLowerCase();
 
             if (!countryKey || !amountKey || !dateKey) {
                 alert('Select all three columns first');
+                return;
+            }
+
+            const allowedStatuses = new Set(
+                [...statusCheckboxes.querySelectorAll('input[type="checkbox"]:checked')]
+                    .map((cb) => cb.value.toLowerCase())
+            );
+            const hasStatusCheckboxes = statusCheckboxes.children.length > 0;
+            const statusFilterActive = Boolean(statusKey) && hasStatusCheckboxes && allowedStatuses.size > 0;
+            const statusFilterBlocksAll = Boolean(statusKey) && hasStatusCheckboxes && allowedStatuses.size === 0;
+
+            if (statusFilterBlocksAll) {
+                resultEl.textContent = 'No statuses are selected. Check at least one status to include rows.';
+                detailsEl.innerHTML = '';
+                setStatus('no statuses selected');
                 return;
             }
 
@@ -465,6 +546,11 @@
             for (const row of parsedRows) {
                 const country = String(row[countryKey] || '').trim();
                 if (countryFilter && country.toLowerCase() !== countryFilter) continue;
+
+                if (statusFilterActive) {
+                    const status = String(row[statusKey] || '').trim().toLowerCase();
+                    if (!allowedStatuses.has(status)) continue;
+                }
 
                 const usd = parseNumber(row[amountKey]);
                 const date = normalizeDate(row[dateKey]);
@@ -532,6 +618,7 @@
         }
 
         loadHeadersBtn.addEventListener('click', loadHeaders);
+        statusColumn.addEventListener('change', populateStatusCheckboxes);
         calcBtn.addEventListener('click', () => {
             calculateTotal().catch((err) => {
                 console.error(err);

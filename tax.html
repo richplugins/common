@@ -570,7 +570,7 @@
             const amountKey = amountColumn.value;
             const dateKey = dateColumn.value;
             const statusKey = statusColumn.value;
-            const countryFilter = countryValue.value.trim().toLowerCase();
+            const countryFilter = countryValue ? countryValue.value.trim().toLowerCase() : null;
 
             if (!countryKey || !amountKey || !dateKey) {
                 alert('Select all three columns first');

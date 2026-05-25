@@ -150,6 +150,7 @@
         const csvInput = document.getElementById('csvInput');
         const loadHeadersBtn = document.getElementById('loadHeadersBtn');
         const calcBtn = document.getElementById('calcBtn');
+        const clearCacheBtn = document.getElementById('clearCacheBtn');
         const countryColumn = document.getElementById('countryColumn');
         const amountColumn = document.getElementById('amountColumn');
         const dateColumn = document.getElementById('dateColumn');
@@ -676,16 +677,24 @@
         loadHeadersBtn.addEventListener('click', loadHeaders);
         statusColumn.addEventListener('change', populateStatusCheckboxes);
         calcBtn.addEventListener('click', () => {
-            calculateTotal().catch((err) => {
-                console.error(err);
-                setStatus('error');
-                resultEl.textContent = 'Error: ' + err.message;
-            });
+            calcBtn.disabled = true;
+            clearCacheBtn.disabled = true;
+            calculateTotal()
+                .catch((err) => {
+                    console.error(err);
+                    setStatus('error');
+                    resultEl.textContent = 'Error: ' + err.message;
+                })
+                .finally(() => {
+                    calcBtn.disabled = false;
+                    clearCacheBtn.disabled = false;
+                });
         });
-        document.getElementById('clearCacheBtn').addEventListener('click', () => {
+        clearCacheBtn.addEventListener('click', () => {
+            const removed = rateCache.size;
             rateCache.clear();
             localStorage.removeItem(RATE_CACHE_KEY);
-            setStatus('rate cache cleared');
+            setStatus('rate cache cleared (' + removed + ' entries removed)');
         });
     </script>
 </body>

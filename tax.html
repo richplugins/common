@@ -102,11 +102,6 @@
     <div class="row">
         <button id="loadHeadersBtn">Load headers</button>
         <button id="calcBtn">Calculate total</button>
-        <button id="clearCacheBtn">Clear rate cache</button>
-        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input id="useCacheCheckbox" type="checkbox" checked>
-            Use rate cache
-        </label>
     </div>
 
     <div class="row">
@@ -130,10 +125,10 @@
             <select id="statusColumn"></select>
         </div>
 
-        <!--div class="field">
+        <div class="field">
             <label for="countryValue">Country value to filter</label>
-            <input id="countryValue" type="text" value="" placeholder="Example: ES or Spain">
-        </div-->
+            <input id="countryValue" type="text" value="ES" placeholder="Example: ES or Spain">
+        </div>
     </div>
 
     <div class="row" id="statusFilterContainer" style="display: none;">
@@ -154,8 +149,6 @@
         const csvInput = document.getElementById('csvInput');
         const loadHeadersBtn = document.getElementById('loadHeadersBtn');
         const calcBtn = document.getElementById('calcBtn');
-        const clearCacheBtn = document.getElementById('clearCacheBtn');
-        const useCacheCheckbox = document.getElementById('useCacheCheckbox');
         const countryColumn = document.getElementById('countryColumn');
         const amountColumn = document.getElementById('amountColumn');
         const dateColumn = document.getElementById('dateColumn');
@@ -171,8 +164,6 @@
 
         let parsedRows = [];
         let headers = [];
-        const RATE_CACHE_KEY = 'usdEurRateCache';
-        const rateCache = new Map(Object.entries(JSON.parse(localStorage.getItem(RATE_CACHE_KEY) || '{}')));
 
         const columns = [
             'Order ID',
@@ -420,12 +411,7 @@
         }
 
         async function getUsdRateByDate(date, cache) {
-            const useCache = useCacheCheckbox.checked;
-            if (useCache && cache.has(date)) {
-                const cached = cache.get(date);
-                console.log('CACHE', date, cached);
-                return cached;
-            }
+            if (cache.has(date)) return cache.get(date);
 
             const url = 'https://api.frankfurter.dev/v2/rates?date=' + encodeURIComponent(date) + '&base=EUR&quotes=USD';
 
@@ -460,11 +446,7 @@
                 }
             }
 
-            console.log('FETCH', date, rate);
-            if (useCache) {
-                cache.set(date, rate);
-                localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
-            }
+            cache.set(date, rate);
             return rate;
         }
 
@@ -583,7 +565,7 @@
             const amountKey = amountColumn.value;
             const dateKey = dateColumn.value;
             const statusKey = statusColumn.value;
-            const countryFilter = countryValue ? countryValue.value.trim().toLowerCase() : null;
+            const countryFilter = countryValue.value.trim().toLowerCase();
 
             if (!countryKey || !amountKey || !dateKey) {
                 alert('Select all three columns first');
@@ -639,15 +621,15 @@
                 return;
             }
 
+            const rateCache = new Map();
             const uniqueDates = [...new Set(matched.map((item) => item.date))];
-            const ratesForThisRun = new Map();
 
             showSpinner();
             try {
                 for (let i = 0; i < uniqueDates.length; i++) {
                     const date = uniqueDates[i];
                     setStatus('loading rate for ' + date + ' (' + (i + 1) + '/' + uniqueDates.length + ')');
-                    ratesForThisRun.set(date, await getUsdRateByDate(date, rateCache));
+                    await getUsdRateByDate(date, rateCache);
                 }
             } finally {
                 hideSpinner();
@@ -661,7 +643,7 @@
             const preview = [];
 
             for (const item of matched) {
-                const rate = ratesForThisRun.get(item.date);
+                const rate = rateCache.get(item.date);
                 const eur = item.usd / rate;
 
                 totalUsd += item.usd;
@@ -691,24 +673,11 @@
         loadHeadersBtn.addEventListener('click', loadHeaders);
         statusColumn.addEventListener('change', populateStatusCheckboxes);
         calcBtn.addEventListener('click', () => {
-            calcBtn.disabled = true;
-            clearCacheBtn.disabled = true;
-            calculateTotal()
-                .catch((err) => {
-                    console.error(err);
-                    setStatus('error');
-                    resultEl.textContent = 'Error: ' + err.message;
-                })
-                .finally(() => {
-                    calcBtn.disabled = false;
-                    clearCacheBtn.disabled = false;
-                });
-        });
-        clearCacheBtn.addEventListener('click', () => {
-            const removed = rateCache.size;
-            rateCache.clear();
-            localStorage.removeItem(RATE_CACHE_KEY);
-            setStatus('rate cache cleared (' + removed + ' entries removed)');
+            calculateTotal().catch((err) => {
+                console.error(err);
+                setStatus('error');
+                resultEl.textContent = 'Error: ' + err.message;
+            });
         });
     </script>
 </body>

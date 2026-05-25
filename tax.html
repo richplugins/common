@@ -59,6 +59,22 @@
             background: #fafafa;
         }
 
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #ccc;
+            border-top-color: #333;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -86,6 +102,11 @@
     <div class="row">
         <button id="loadHeadersBtn">Load headers</button>
         <button id="calcBtn">Calculate total</button>
+        <button id="clearCacheBtn">Clear rate cache</button>
+        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input id="useCacheCheckbox" type="checkbox" checked>
+            Use rate cache
+        </label>
     </div>
 
     <div class="row">
@@ -105,12 +126,27 @@
         </div>
 
         <div class="field">
+            <label for="statusColumn">Status column</label>
+            <select id="statusColumn"></select>
+        </div>
+
+        <!--div class="field">
             <label for="countryValue">Country value to filter</label>
-            <input id="countryValue" type="text" value="ES" placeholder="Example: ES or Spain">
+            <input id="countryValue" type="text" value="" placeholder="Example: ES or Spain">
+        </div-->
+    </div>
+
+    <div class="row" id="statusFilterContainer" style="display: none;">
+        <div class="field" style="min-width: 100%;">
+            <label>Statuses to include</label>
+            <div id="statusCheckboxes"></div>
         </div>
     </div>
 
-    <div id="status">Status: waiting for CSV</div>
+    <div id="status">
+        <span class="spinner" id="spinner" style="display: none;"></span>
+        <span id="statusText">Status: waiting for CSV</span>
+    </div>
     <div id="result">Result will appear here</div>
     <div id="details"></div>
 
@@ -118,16 +154,25 @@
         const csvInput = document.getElementById('csvInput');
         const loadHeadersBtn = document.getElementById('loadHeadersBtn');
         const calcBtn = document.getElementById('calcBtn');
+        const clearCacheBtn = document.getElementById('clearCacheBtn');
+        const useCacheCheckbox = document.getElementById('useCacheCheckbox');
         const countryColumn = document.getElementById('countryColumn');
         const amountColumn = document.getElementById('amountColumn');
         const dateColumn = document.getElementById('dateColumn');
+        const statusColumn = document.getElementById('statusColumn');
+        const statusFilterContainer = document.getElementById('statusFilterContainer');
+        const statusCheckboxes = document.getElementById('statusCheckboxes');
         const countryValue = document.getElementById('countryValue');
         const statusEl = document.getElementById('status');
+        const statusTextEl = document.getElementById('statusText');
+        const spinnerEl = document.getElementById('spinner');
         const resultEl = document.getElementById('result');
         const detailsEl = document.getElementById('details');
 
         let parsedRows = [];
         let headers = [];
+        const RATE_CACHE_KEY = 'usdEurRateCache';
+        const rateCache = new Map(Object.entries(JSON.parse(localStorage.getItem(RATE_CACHE_KEY) || '{}')));
 
         const columns = [
             'Order ID',
@@ -167,9 +212,18 @@
         fillColumnSelect(document.getElementById('countryColumn'), 'Customer Country');
         fillColumnSelect(document.getElementById('amountColumn'), 'Balance Earnings');
         fillColumnSelect(document.getElementById('dateColumn'), 'Date');
+        fillColumnSelect(document.getElementById('statusColumn'), 'Order Status');
 
         function setStatus(text) {
-            statusEl.textContent = 'Status: ' + text;
+            statusTextEl.textContent = 'Status: ' + text;
+        }
+
+        function showSpinner() {
+            spinnerEl.style.display = 'inline-block';
+        }
+
+        function hideSpinner() {
+            spinnerEl.style.display = 'none';
         }
 
         function escapeHtml(value) {
@@ -366,23 +420,51 @@
         }
 
         async function getUsdRateByDate(date, cache) {
-            if (cache.has(date)) return cache.get(date);
+            const useCache = useCacheCheckbox.checked;
+            if (useCache && cache.has(date)) {
+                const cached = cache.get(date);
+                console.log('CACHE', date, cached);
+                return cached;
+            }
 
             const url = 'https://api.frankfurter.dev/v2/rates?date=' + encodeURIComponent(date) + '&base=EUR&quotes=USD';
-            const response = await fetch(url);
 
-            if (!response.ok) {
-                throw new Error('Rate request failed for ' + date + ' with status ' + response.status);
+            async function attempt() {
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error('Rate request failed for ' + date + ' with status ' + response.status);
+                }
+
+                const data = await response.json();
+                const rate = data && Array.isArray(data) ? data[0].rate : data.rate;
+
+                if (!rate || typeof rate !== 'number') {
+                    throw new Error('USD rate not found for ' + date);
+                }
+
+                return rate;
             }
 
-            const data = await response.json();
-            const rate = data && Array.isArray(data) ? data[0].rate : data.rate;
-
-            if (!rate || typeof rate !== 'number') {
-                throw new Error('USD rate not found for ' + date);
+            let rate;
+            try {
+                rate = await attempt();
+            } catch (firstError) {
+                console.warn('Rate fetch failed for ' + date + ', retrying in 2s:', firstError);
+                setStatus('rate fetch for ' + date + ' failed, retrying in 2s');
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                try {
+                    rate = await attempt();
+                } catch (secondError) {
+                    throw new Error('Rate request for ' + date + ' failed twice. ' + secondError.message);
+                }
             }
 
-            cache.set(date, rate);
+            console.log('FETCH', date, rate);
+            if (useCache) {
+                cache.set(date, rate);
+                localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+            }
             return rate;
         }
 
@@ -417,6 +499,52 @@
                 '</table>';
         }
 
+        function populateStatusCheckboxes() {
+            const statusKey = statusColumn.value;
+            statusCheckboxes.innerHTML = '';
+
+            if (!statusKey || !parsedRows.length) {
+                statusFilterContainer.style.display = 'none';
+                return;
+            }
+
+            const uniqueStatuses = [...new Set(
+                parsedRows
+                    .map((r) => String(r[statusKey] || '').trim())
+                    .filter(Boolean)
+            )].sort();
+
+            if (!uniqueStatuses.length) {
+                statusFilterContainer.style.display = 'none';
+                return;
+            }
+
+            const defaultChecked = ['completed', 'partially refunded'];
+
+            for (const status of uniqueStatuses) {
+                const label = document.createElement('label');
+                label.style.display = 'inline-flex';
+                label.style.alignItems = 'center';
+                label.style.gap = '4px';
+                label.style.marginRight = '14px';
+                label.style.fontWeight = 'normal';
+                label.style.cursor = 'pointer';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = status;
+                if (defaultChecked.includes(status.toLowerCase())) {
+                    checkbox.checked = true;
+                }
+
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(' ' + status));
+                statusCheckboxes.appendChild(label);
+            }
+
+            statusFilterContainer.style.display = 'flex';
+        }
+
         function loadHeaders() {
             const text = csvInput.value.trim();
             if (!text) {
@@ -436,6 +564,9 @@
             fillSelect(countryColumn, headers, ['Customer Country', 'Country', 'customer country']);
             fillSelect(amountColumn, headers, ['Balance Earnings', 'Amount', 'balance earnings']);
             fillSelect(dateColumn, headers, ['Date', 'date']);
+            fillSelect(statusColumn, headers, ['Order Status', 'Status', 'order status']);
+
+            populateStatusCheckboxes();
 
             setStatus('loaded ' + parsedRows.length + ' data rows');
             resultEl.textContent = 'Headers loaded. Select columns and click "Calculate total".';
@@ -451,10 +582,26 @@
             const countryKey = countryColumn.value;
             const amountKey = amountColumn.value;
             const dateKey = dateColumn.value;
-            const countryFilter = countryValue.value.trim().toLowerCase();
+            const statusKey = statusColumn.value;
+            const countryFilter = countryValue ? countryValue.value.trim().toLowerCase() : null;
 
             if (!countryKey || !amountKey || !dateKey) {
                 alert('Select all three columns first');
+                return;
+            }
+
+            const allowedStatuses = new Set(
+                [...statusCheckboxes.querySelectorAll('input[type="checkbox"]:checked')]
+                    .map((cb) => cb.value.toLowerCase())
+            );
+            const hasStatusCheckboxes = statusCheckboxes.children.length > 0;
+            const statusFilterActive = Boolean(statusKey) && hasStatusCheckboxes && allowedStatuses.size > 0;
+            const statusFilterBlocksAll = Boolean(statusKey) && hasStatusCheckboxes && allowedStatuses.size === 0;
+
+            if (statusFilterBlocksAll) {
+                resultEl.textContent = 'No statuses are selected. Check at least one status to include rows.';
+                detailsEl.innerHTML = '';
+                setStatus('no statuses selected');
                 return;
             }
 
@@ -465,6 +612,11 @@
             for (const row of parsedRows) {
                 const country = String(row[countryKey] || '').trim();
                 if (countryFilter && country.toLowerCase() !== countryFilter) continue;
+
+                if (statusFilterActive) {
+                    const status = String(row[statusKey] || '').trim().toLowerCase();
+                    if (!allowedStatuses.has(status)) continue;
+                }
 
                 const usd = parseNumber(row[amountKey]);
                 const date = normalizeDate(row[dateKey]);
@@ -487,13 +639,18 @@
                 return;
             }
 
-            setStatus('loading exchange rates');
-
-            const rateCache = new Map();
             const uniqueDates = [...new Set(matched.map((item) => item.date))];
+            const ratesForThisRun = new Map();
 
-            for (const date of uniqueDates) {
-                await getUsdRateByDate(date, rateCache);
+            showSpinner();
+            try {
+                for (let i = 0; i < uniqueDates.length; i++) {
+                    const date = uniqueDates[i];
+                    setStatus('loading rate for ' + date + ' (' + (i + 1) + '/' + uniqueDates.length + ')');
+                    ratesForThisRun.set(date, await getUsdRateByDate(date, rateCache));
+                }
+            } finally {
+                hideSpinner();
             }
 
             setStatus('calculating totals');
@@ -504,7 +661,7 @@
             const preview = [];
 
             for (const item of matched) {
-                const rate = rateCache.get(item.date);
+                const rate = ratesForThisRun.get(item.date);
                 const eur = item.usd / rate;
 
                 totalUsd += item.usd;
@@ -532,12 +689,26 @@
         }
 
         loadHeadersBtn.addEventListener('click', loadHeaders);
+        statusColumn.addEventListener('change', populateStatusCheckboxes);
         calcBtn.addEventListener('click', () => {
-            calculateTotal().catch((err) => {
-                console.error(err);
-                setStatus('error');
-                resultEl.textContent = 'Error: ' + err.message;
-            });
+            calcBtn.disabled = true;
+            clearCacheBtn.disabled = true;
+            calculateTotal()
+                .catch((err) => {
+                    console.error(err);
+                    setStatus('error');
+                    resultEl.textContent = 'Error: ' + err.message;
+                })
+                .finally(() => {
+                    calcBtn.disabled = false;
+                    clearCacheBtn.disabled = false;
+                });
+        });
+        clearCacheBtn.addEventListener('click', () => {
+            const removed = rateCache.size;
+            rateCache.clear();
+            localStorage.removeItem(RATE_CACHE_KEY);
+            setStatus('rate cache cleared (' + removed + ' entries removed)');
         });
     </script>
 </body>

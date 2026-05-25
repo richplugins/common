@@ -102,6 +102,7 @@
     <div class="row">
         <button id="loadHeadersBtn">Load headers</button>
         <button id="calcBtn">Calculate total</button>
+        <button id="clearCacheBtn">Clear rate cache</button>
     </div>
 
     <div class="row">
@@ -164,6 +165,8 @@
 
         let parsedRows = [];
         let headers = [];
+        const RATE_CACHE_KEY = 'usdEurRateCache';
+        const rateCache = new Map(Object.entries(JSON.parse(localStorage.getItem(RATE_CACHE_KEY) || '{}')));
 
         const columns = [
             'Order ID',
@@ -447,6 +450,7 @@
             }
 
             cache.set(date, rate);
+            localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
             return rate;
         }
 
@@ -621,7 +625,6 @@
                 return;
             }
 
-            const rateCache = new Map();
             const uniqueDates = [...new Set(matched.map((item) => item.date))];
 
             showSpinner();
@@ -678,6 +681,11 @@
                 setStatus('error');
                 resultEl.textContent = 'Error: ' + err.message;
             });
+        });
+        document.getElementById('clearCacheBtn').addEventListener('click', () => {
+            rateCache.clear();
+            localStorage.removeItem(RATE_CACHE_KEY);
+            setStatus('rate cache cleared');
         });
     </script>
 </body>

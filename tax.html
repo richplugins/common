@@ -103,6 +103,10 @@
         <button id="loadHeadersBtn">Load headers</button>
         <button id="calcBtn">Calculate total</button>
         <button id="clearCacheBtn">Clear rate cache</button>
+        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input id="useCacheCheckbox" type="checkbox" checked>
+            Use rate cache
+        </label>
     </div>
 
     <div class="row">
@@ -151,6 +155,7 @@
         const loadHeadersBtn = document.getElementById('loadHeadersBtn');
         const calcBtn = document.getElementById('calcBtn');
         const clearCacheBtn = document.getElementById('clearCacheBtn');
+        const useCacheCheckbox = document.getElementById('useCacheCheckbox');
         const countryColumn = document.getElementById('countryColumn');
         const amountColumn = document.getElementById('amountColumn');
         const dateColumn = document.getElementById('dateColumn');
@@ -415,7 +420,12 @@
         }
 
         async function getUsdRateByDate(date, cache) {
-            if (cache.has(date)) return cache.get(date);
+            const useCache = useCacheCheckbox.checked;
+            if (useCache && cache.has(date)) {
+                const cached = cache.get(date);
+                console.log('CACHE', date, cached);
+                return cached;
+            }
 
             const url = 'https://api.frankfurter.dev/v2/rates?date=' + encodeURIComponent(date) + '&base=EUR&quotes=USD';
 
@@ -450,8 +460,11 @@
                 }
             }
 
-            cache.set(date, rate);
-            localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+            console.log('FETCH', date, rate);
+            if (useCache) {
+                cache.set(date, rate);
+                localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+            }
             return rate;
         }
 
@@ -627,13 +640,14 @@
             }
 
             const uniqueDates = [...new Set(matched.map((item) => item.date))];
+            const ratesForThisRun = new Map();
 
             showSpinner();
             try {
                 for (let i = 0; i < uniqueDates.length; i++) {
                     const date = uniqueDates[i];
                     setStatus('loading rate for ' + date + ' (' + (i + 1) + '/' + uniqueDates.length + ')');
-                    await getUsdRateByDate(date, rateCache);
+                    ratesForThisRun.set(date, await getUsdRateByDate(date, rateCache));
                 }
             } finally {
                 hideSpinner();
@@ -647,7 +661,7 @@
             const preview = [];
 
             for (const item of matched) {
-                const rate = rateCache.get(item.date);
+                const rate = ratesForThisRun.get(item.date);
                 const eur = item.usd / rate;
 
                 totalUsd += item.usd;
